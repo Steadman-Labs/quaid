@@ -22,7 +22,7 @@ from lib.similarity import cosine_similarity as _lib_cosine_similarity
 
 # Configuration — resolved from config system
 DB_PATH = get_db_path()
-WORKSPACE = Path(os.environ.get("CLAWDBOT_WORKSPACE", "${QUAID_WORKSPACE}"))
+WORKSPACE = Path(os.environ.get("CLAWDBOT_WORKSPACE", "/Users/clawdbot/clawd"))
 
 
 def _rag_config():
