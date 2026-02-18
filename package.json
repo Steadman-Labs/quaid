@@ -1,0 +1,31 @@
+{
+  "name": "quaid",
+  "version": "0.1.5-alpha",
+  "description": "Persistent long-term memory for AI agents",
+  "author": "Solomon Steadman <solstead@users.noreply.github.com> (https://github.com/solstead)",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/steadman-labs/quaid.git"
+  },
+  "homepage": "https://github.com/steadman-labs/quaid",
+  "keywords": [
+    "memory",
+    "llm",
+    "mcp",
+    "openclaw",
+    "ai",
+    "knowledge-graph",
+    "sqlite-vec",
+    "rag"
+  ],
+  "type": "module",
+  "main": "plugins/quaid/index.js",
+  "scripts": {
+    "setup": "node setup-quaid.mjs",
+    "test": "cd plugins/quaid && python3 -m pytest tests/ -x -q"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -1,0 +1,837 @@
+#!/usr/bin/env bash
+# =============================================================================
+# quaid — CLI for the Quaid Memory Plugin
+# =============================================================================
+# Thin wrapper that delegates to existing Python functions in plugins/quaid/.
+#
+# Usage:
+#   quaid extract <file>  Extract memories from conversation transcript
+#   quaid store <text>    Store a single memory
+#   quaid search <query>  Search memories (full recall pipeline)
+#   quaid find <query>    Quick search (no reranking)
+#   quaid get <id>        Get a memory by ID
+#   quaid forget [query]  Delete a memory
+#   quaid edge <s> <r> <o> Create a relationship edge
+#   quaid docs <query>    Search project documentation
+#   quaid doctor          Health check (DB, embeddings, API key, gateway)
+#   quaid config          Show current configuration
+#   quaid stats           Show database statistics
+#   quaid export          Export all facts as JSON (data portability)
+#   quaid janitor [opts]  Run janitor pipeline (--dry-run, --task <name>)
+#   quaid help            Show this help
+# =============================================================================
+
+set -euo pipefail
+
+WORKSPACE_ROOT="${QUAID_HOME:-${CLAWDBOT_WORKSPACE:-}}"
+if [[ -z "$WORKSPACE_ROOT" ]]; then
+    for dir in "$HOME/quaid" "$HOME/.openclaw/workspace" "$HOME/.config/openclaw"; do
+        if [[ -d "$dir" ]] && ( [[ -f "$dir/SOUL.md" ]] || [[ -d "$dir/plugins" ]] || [[ -f "$dir/IDENTITY.md" ]] ); then
+            WORKSPACE_ROOT="$dir"
+            break
+        fi
+    done
+fi
+if [[ -z "$WORKSPACE_ROOT" ]]; then
+    WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+PLUGIN_DIR="${WORKSPACE_ROOT}/plugins/quaid"
+CONFIG_DIR="${WORKSPACE_ROOT}/config"
+DATA_DIR="${WORKSPACE_ROOT}/data"
+
+# Colors
+if [[ -t 1 ]]; then
+    BOLD='\033[1m' GREEN='\033[0;32m' YELLOW='\033[0;33m'
+    RED='\033[0;31m' CYAN='\033[0;36m' DIM='\033[2m' RESET='\033[0m'
+else
+    BOLD='' GREEN='' YELLOW='' RED='' CYAN='' DIM='' RESET=''
+fi
+
+info()  { echo -e "${GREEN}[+]${RESET} $*"; }
+warn()  { echo -e "${YELLOW}[!]${RESET} $*"; }
+error() { echo -e "${RED}[x]${RESET} $*" >&2; }
+
+# Run a Python snippet inside the plugin directory with workspace set
+run_py() {
+    (
+        cd "$PLUGIN_DIR"
+        if [[ -n "${QUAID_HOME:-}" ]] || { [[ -z "${CLAWDBOT_WORKSPACE:-}" ]] && ! command -v clawdbot &>/dev/null && ! command -v openclaw &>/dev/null; }; then
+            QUAID_HOME="$WORKSPACE_ROOT" QUAID_ADAPTER=standalone python3 -c "$1"
+        else
+            CLAWDBOT_WORKSPACE="$WORKSPACE_ROOT" python3 -c "$1"
+        fi
+    )
+}
+
+# Produce the correct env var export for the detected mode
+_quaid_env() {
+    if [[ -n "${QUAID_HOME:-}" ]] || { [[ -z "${CLAWDBOT_WORKSPACE:-}" ]] && ! command -v clawdbot &>/dev/null && ! command -v openclaw &>/dev/null; }; then
+        echo "QUAID_HOME=$WORKSPACE_ROOT QUAID_ADAPTER=standalone"
+    else
+        echo "CLAWDBOT_WORKSPACE=$WORKSPACE_ROOT"
+    fi
+}
+
+# Escape single quotes for safe interpolation into Python single-quoted strings
+py_escape() { printf '%s' "$1" | sed "s/'/\\\\'/g"; }
+
+# Resolve owner ID from config
+get_owner() {
+    python3 -c "import json; print(json.load(open('$(py_escape "$CONFIG_DIR")/memory.json')).get('users',{}).get('defaultOwner','default'))" 2>/dev/null || echo "default"
+}
+
+# Resolve Ollama URL: OLLAMA_URL env > config > localhost
+get_ollama_url() {
+    if [[ -n "${OLLAMA_URL:-}" ]]; then
+        echo "$OLLAMA_URL"
+    elif [[ -f "${CONFIG_DIR}/memory.json" ]]; then
+        local url
+        url=$(python3 -c "import json; print(json.load(open('$(py_escape "$CONFIG_DIR")/memory.json')).get('ollama',{}).get('url',''))" 2>/dev/null || true)
+        if [[ -n "$url" ]] && [[ "$url" != "null" ]]; then
+            echo "$url"
+        else
+            echo "http://localhost:11434"
+        fi
+    else
+        echo "http://localhost:11434"
+    fi
+}
+
+# --- Commands ---
+
+cmd_doctor() {
+    echo -e "${BOLD}Quaid Health Check${RESET}"
+    echo ""
+
+    local all_ok=true
+
+    # Database
+    if [[ -f "${DATA_DIR}/memory.db" ]]; then
+        local stats
+        stats=$(run_py "
+import sqlite3, json
+conn = sqlite3.connect('$(py_escape "$DATA_DIR")/memory.db')
+tables = conn.execute(\"SELECT COUNT(*) FROM sqlite_master WHERE type='table'\").fetchone()[0]
+nodes = conn.execute('SELECT COUNT(*) FROM nodes').fetchone()[0]
+edges = conn.execute('SELECT COUNT(*) FROM edges').fetchone()[0]
+pending = conn.execute(\"SELECT COUNT(*) FROM nodes WHERE status='pending'\").fetchone()[0]
+active = conn.execute(\"SELECT COUNT(*) FROM nodes WHERE status='active'\").fetchone()[0]
+conn.close()
+print(json.dumps({'tables': tables, 'nodes': nodes, 'edges': edges, 'pending': pending, 'active': active}))
+" 2>/dev/null) || stats="{}"
+        local tables nodes edges pending active
+        tables=$(echo "$stats" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tables',0))" 2>/dev/null || echo "?")
+        nodes=$(echo "$stats" | python3 -c "import sys,json; print(json.load(sys.stdin).get('nodes',0))" 2>/dev/null || echo "?")
+        edges=$(echo "$stats" | python3 -c "import sys,json; print(json.load(sys.stdin).get('edges',0))" 2>/dev/null || echo "?")
+        pending=$(echo "$stats" | python3 -c "import sys,json; print(json.load(sys.stdin).get('pending',0))" 2>/dev/null || echo "?")
+        active=$(echo "$stats" | python3 -c "import sys,json; print(json.load(sys.stdin).get('active',0))" 2>/dev/null || echo "?")
+        echo -e "  ${GREEN}✓${RESET} Database     — ${nodes} nodes (${active} active, ${pending} pending), ${edges} edges, ${tables} tables"
+    else
+        echo -e "  ${RED}✗${RESET} Database     — NOT FOUND (${DATA_DIR}/memory.db)"
+        all_ok=false
+    fi
+
+    # Config
+    if [[ -f "${CONFIG_DIR}/memory.json" ]]; then
+        local provider model
+        provider=$(python3 -c "import json; c=json.load(open('$(py_escape "$CONFIG_DIR")/memory.json')); print(c.get('models',{}).get('provider','anthropic'))" 2>/dev/null || echo "?")
+        model=$(python3 -c "import json; c=json.load(open('$(py_escape "$CONFIG_DIR")/memory.json')); print(c.get('models',{}).get('highReasoning','?'))" 2>/dev/null || echo "?")
+        echo -e "  ${GREEN}✓${RESET} Config       — OK (provider: ${provider}, model: ${model})"
+    else
+        echo -e "  ${RED}✗${RESET} Config       — NOT FOUND (${CONFIG_DIR}/memory.json)"
+        all_ok=false
+    fi
+
+    # Ollama
+    local ollama_url
+    ollama_url=$(get_ollama_url)
+    if curl -sf "${ollama_url}/api/tags" &>/dev/null; then
+        local embed_model
+        embed_model=$(python3 -c "import json; c=json.load(open('$(py_escape "$CONFIG_DIR")/memory.json')); print(c.get('ollama',{}).get('embeddingModel','?'))" 2>/dev/null || echo "?")
+        if [[ "$ollama_url" == *"localhost"* ]] || [[ "$ollama_url" == *"127.0.0.1"* ]]; then
+            echo -e "  ${GREEN}✓${RESET} Ollama       — Running (embedding: ${embed_model})"
+        else
+            echo -e "  ${GREEN}✓${RESET} Ollama       — Remote at ${ollama_url} (embedding: ${embed_model})"
+        fi
+    else
+        echo -e "  ${YELLOW}~${RESET} Ollama       — Not reachable at ${ollama_url} (embeddings will fail)"
+    fi
+
+    # API key
+    local api_key_env
+    api_key_env=$(python3 -c "import json; c=json.load(open('$(py_escape "$CONFIG_DIR")/memory.json')); print(c.get('models',{}).get('apiKeyEnv','ANTHROPIC_API_KEY'))" 2>/dev/null || echo "ANTHROPIC_API_KEY")
+    if [[ -n "$api_key_env" ]] && [[ -n "${!api_key_env:-}" ]]; then
+        echo -e "  ${GREEN}✓${RESET} API Key      — Found (${api_key_env})"
+    elif [[ -n "$api_key_env" ]] && [[ -f "${WORKSPACE_ROOT}/.env" ]] && grep -q "^${api_key_env}=" "${WORKSPACE_ROOT}/.env" 2>/dev/null; then
+        echo -e "  ${GREEN}✓${RESET} API Key      — Found in .env (${api_key_env})"
+    elif [[ -z "$api_key_env" ]]; then
+        echo -e "  ${GREEN}✓${RESET} API Key      — Not required (local provider)"
+    else
+        echo -e "  ${RED}✗${RESET} API Key      — NOT FOUND (set ${api_key_env})"
+        all_ok=false
+    fi
+
+    # Gateway hooks (PR #13287)
+    local gw_path=""
+    # Try resolving the clawdbot/openclaw CLI symlink to find the gateway root
+    for cli_name in clawdbot openclaw; do
+        if command -v "$cli_name" &>/dev/null; then
+            local resolved
+            resolved=$(readlink -f "$(command -v "$cli_name")" 2>/dev/null || readlink "$(command -v "$cli_name")" 2>/dev/null || true)
+            if [[ -n "$resolved" ]]; then
+                # Resolve: .../dist/entry.js → .../  or  .../bin/cli.js → .../
+                local candidate_dir
+                candidate_dir=$(dirname "$(dirname "$resolved")")
+                if [[ -f "${candidate_dir}/package.json" ]]; then
+                    gw_path="$candidate_dir"
+                    break
+                fi
+            fi
+        fi
+    done
+    # Fall back to common npm global paths
+    if [[ -z "$gw_path" ]]; then
+        for candidate in \
+            "$(npm root -g 2>/dev/null)/openclaw" \
+            "$(npm root -g 2>/dev/null)/clawdbot" \
+            "/opt/homebrew/lib/node_modules/openclaw" \
+            "/opt/homebrew/lib/node_modules/clawdbot" \
+            "/usr/local/lib/node_modules/openclaw" \
+            "/usr/lib/node_modules/openclaw" \
+            "/usr/lib/node_modules/clawdbot"
+        do
+            if [[ -d "$candidate" ]] && [[ -f "${candidate}/package.json" ]]; then
+                gw_path="$candidate"
+                break
+            fi
+        done
+    fi
+    if [[ -n "$gw_path" ]]; then
+        local has_compaction=false has_bootstrap=false
+        if grep -rq "runBeforeCompaction\|before_compaction" "${gw_path}/dist/" 2>/dev/null || \
+           grep -rq "runBeforeCompaction\|before_compaction" "${gw_path}/src/" 2>/dev/null; then
+            has_compaction=true
+        fi
+        if grep -rq "extraBootstrapFiles" "${gw_path}/dist/" 2>/dev/null || \
+           grep -rq "extraBootstrapFiles" "${gw_path}/src/" 2>/dev/null; then
+            has_bootstrap=true
+        fi
+        local gw_ver
+        gw_ver=$(python3 -c "import json; print(json.load(open('$(py_escape "$gw_path")/package.json')).get('version','?'))" 2>/dev/null || echo "?")
+
+        if $has_compaction && $has_bootstrap; then
+            echo -e "  ${GREEN}✓${RESET} Gateway      — Hooks present (v${gw_ver})"
+        elif $has_compaction || $has_bootstrap; then
+            echo -e "  ${YELLOW}~${RESET} Gateway      — Partial hooks (v${gw_ver})"
+            echo ""
+            echo "             Your gateway has some but not all required hooks."
+            echo "             Memory extraction may not work correctly."
+            echo ""
+            echo "             Fix: npm install -g openclaw@latest"
+            echo "             Or:  npm install -g openclaw@latest"
+            echo "             PR:  https://github.com/openclaw/openclaw/pull/13287"
+            echo ""
+            all_ok=false
+        else
+            echo -e "  ${RED}✗${RESET} Gateway      — Missing memory hooks (v${gw_ver})"
+            echo ""
+            echo "             Quaid needs gateway hooks to extract memories from"
+            echo "             conversations. Without them, nothing gets captured."
+            echo ""
+            echo "             Fix: npm install -g openclaw@latest"
+            echo "                  (if PR #13287 has been merged)"
+            echo ""
+            echo "             Or:  npm install -g openclaw@latest"
+            echo "                  (install directly from hooks branch)"
+            echo ""
+            echo "             Or:  re-run setup-quaid.sh to auto-patch"
+            echo ""
+            echo "             PR:  https://github.com/openclaw/openclaw/pull/13287"
+            echo ""
+            all_ok=false
+        fi
+    elif command -v clawdbot &>/dev/null || command -v openclaw &>/dev/null; then
+        echo -e "  ${YELLOW}~${RESET} Gateway      — Installed but could not locate package files"
+        echo ""
+        echo "             The CLI is on your PATH but the installer couldn't find the"
+        echo "             package directory to verify hooks. This is unusual."
+        echo ""
+        echo "             Try: npm ls -g openclaw"
+        echo "             Or check: which clawdbot && readlink -f \$(which clawdbot)"
+        echo ""
+    else
+        echo -e "  ${RED}✗${RESET} Gateway      — NOT FOUND"
+        echo ""
+        echo "             Quaid is a plugin for OpenClaw. Install the gateway first:"
+        echo "             npm install -g openclaw"
+        echo ""
+        all_ok=false
+    fi
+
+    # Plugin source
+    if [[ -f "${PLUGIN_DIR}/memory_graph.py" ]]; then
+        echo -e "  ${GREEN}✓${RESET} Plugin       — Installed at ${PLUGIN_DIR}"
+    else
+        echo -e "  ${RED}✗${RESET} Plugin       — NOT FOUND"
+        all_ok=false
+    fi
+
+    echo ""
+    if $all_ok; then
+        info "All checks passed."
+    else
+        warn "Some checks failed. See above."
+    fi
+}
+
+cmd_config() {
+    if [[ ! -f "${CONFIG_DIR}/memory.json" ]]; then
+        error "Config not found at ${CONFIG_DIR}/memory.json"
+        exit 1
+    fi
+    echo -e "${BOLD}Quaid Configuration${RESET}"
+    echo -e "${DIM}${CONFIG_DIR}/memory.json${RESET}"
+    echo ""
+    python3 -c "
+import json
+with open('$(py_escape "$CONFIG_DIR")/memory.json') as f:
+    config = json.load(f)
+
+# Show key settings
+m = config.get('models', {})
+s = config.get('systems', {})
+o = config.get('ollama', {})
+u = config.get('users', {})
+
+print(f'  Provider:    {m.get(\"provider\", \"anthropic\")}')
+print(f'  High model:  {m.get(\"highReasoning\", \"?\")}')
+print(f'  Low model:   {m.get(\"lowReasoning\", \"?\")}')
+print(f'  API key env: {m.get(\"apiKeyEnv\", \"ANTHROPIC_API_KEY\")}')
+if m.get('baseUrl'):
+    print(f'  Base URL:    {m[\"baseUrl\"]}')
+print(f'  Embeddings:  {o.get(\"embeddingModel\", \"?\")} (dim={o.get(\"embeddingDim\", \"?\")})')
+print(f'  Owner:       {u.get(\"defaultOwner\", \"default\")}')
+print()
+print(f'  Systems:')
+print(f'    Memory:    {\"on\" if s.get(\"memory\", True) else \"off\"}')
+print(f'    Journal:   {\"on\" if s.get(\"journal\", True) else \"off\"}')
+print(f'    Projects:  {\"on\" if s.get(\"projects\", True) else \"off\"}')
+print(f'    Workspace: {\"on\" if s.get(\"workspace\", True) else \"off\"}')
+"
+}
+
+cmd_stats() {
+    (cd "$PLUGIN_DIR" && eval "$(_quaid_env)" python3 memory_graph.py stats)
+}
+
+cmd_extract() {
+    local file="" dry_run="" no_snippets="" no_journal="" json_out="" extra_args=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run)      dry_run="--dry-run"; shift ;;
+            --no-snippets)  no_snippets="--no-snippets"; shift ;;
+            --no-journal)   no_journal="--no-journal"; shift ;;
+            --json)         json_out="--json"; shift ;;
+            --owner)        extra_args+=(--owner "$2"); shift 2 ;;
+            --label)        extra_args+=(--label "$2"); shift 2 ;;
+            -*)             error "Unknown option: $1"; exit 1 ;;
+            *)              file="$1"; shift ;;
+        esac
+    done
+    if [[ -z "$file" ]]; then
+        error "Usage: quaid extract <file> [--dry-run] [--no-snippets] [--no-journal] [--json]"
+        echo ""
+        echo "  <file>  Path to transcript file (JSONL or text), or - for stdin"
+        exit 1
+    fi
+    (cd "$PLUGIN_DIR" && eval "$(_quaid_env)" python3 extract.py "$file" \
+        ${dry_run:+"$dry_run"} ${no_snippets:+"$no_snippets"} ${no_journal:+"$no_journal"} \
+        ${json_out:+"$json_out"} "${extra_args[@]+"${extra_args[@]}"}")
+}
+
+cmd_store() {
+    if [[ $# -eq 0 ]]; then
+        error "Usage: quaid store <text> [--category <cat>] [--pinned]"
+        exit 1
+    fi
+    local text="" category="fact" pinned=""
+    local -a positional=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --category) category="$2"; shift 2 ;;
+            --pinned)   pinned="--pinned"; shift ;;
+            *)          positional+=("$1"); shift ;;
+        esac
+    done
+    text="${positional[*]}"
+    if [[ -z "$text" ]]; then
+        error "Usage: quaid store <text>"
+        exit 1
+    fi
+    local owner
+    owner=$(get_owner)
+    local cmd="store '$(py_escape "$text")' --owner '$owner' --category '$category' --source cli"
+    if [[ -n "$pinned" ]]; then
+        cmd="$cmd --pinned"
+    fi
+    (cd "$PLUGIN_DIR" && eval "$(_quaid_env)" python3 memory_graph.py $cmd)
+}
+
+cmd_get() {
+    if [[ $# -eq 0 ]]; then
+        error "Usage: quaid get <id>"
+        exit 1
+    fi
+    local node_id="$1"
+    run_py "
+import json, sys
+sys.path.insert(0, '.')
+from api import get_memory
+result = get_memory('$(py_escape "$node_id")')
+if result is None:
+    print('Memory not found: $(py_escape "$node_id")', file=sys.stderr)
+    sys.exit(1)
+print(json.dumps(result, indent=2, default=str))
+"
+}
+
+cmd_forget() {
+    local node_id="" query="" yes=false
+    local -a positional=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --id)   node_id="$2"; shift 2 ;;
+            --yes|-y) yes=true; shift ;;
+            *)      positional+=("$1"); shift ;;
+        esac
+    done
+
+    if [[ -z "$node_id" ]] && [[ ${#positional[@]} -gt 0 ]]; then
+        query="${positional[*]}"
+    fi
+
+    if [[ -z "$node_id" ]] && [[ -z "$query" ]]; then
+        error "Usage: quaid forget [--id <id>] [query...] [--yes]"
+        exit 1
+    fi
+
+    # If deleting by query and not --yes, show the match and confirm
+    if [[ -n "$query" ]] && ! $yes; then
+        echo "Searching for: $query"
+        local owner
+        owner=$(get_owner)
+        run_py "
+import sys
+sys.path.insert(0, '.')
+from api import search
+results = search('$(py_escape "$query")', owner_id='$(py_escape "$owner")', limit=1)
+if not results:
+    print('No matching memory found.', file=sys.stderr)
+    sys.exit(1)
+r = results[0]
+print(f'  Match: {r[\"text\"][:100]}')
+print(f'  ID:    {r[\"id\"]}')
+print(f'  Score: {r[\"similarity\"]}')
+"
+        echo ""
+        echo -en "${BOLD}Delete this memory? [y/N]${RESET} "
+        read -r REPLY
+        if [[ ! "$REPLY" =~ ^[Yy] ]]; then
+            echo "Cancelled."
+            exit 0
+        fi
+    fi
+
+    run_py "
+import sys
+sys.path.insert(0, '.')
+from api import forget
+node_id = '$(py_escape "$node_id")' or None
+query = '$(py_escape "$query")' or None
+deleted = forget(node_id=node_id, query=query)
+if deleted:
+    print('Memory deleted.')
+else:
+    print('No memory found to delete.', file=sys.stderr)
+    sys.exit(1)
+"
+}
+
+cmd_find() {
+    if [[ $# -eq 0 ]]; then
+        error "Usage: quaid find <query> [--limit N]"
+        exit 1
+    fi
+    local limit=10
+    local -a positional=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --limit) limit="$2"; shift 2 ;;
+            *)       positional+=("$1"); shift ;;
+        esac
+    done
+    local query="${positional[*]}"
+    local owner
+    owner=$(get_owner)
+    run_py "
+import json, sys
+sys.path.insert(0, '.')
+from api import search
+results = search('$(py_escape "$query")', owner_id='$(py_escape "$owner")', limit=$limit)
+if not results:
+    print('No results found.')
+    sys.exit(0)
+for i, r in enumerate(results, 1):
+    sim = r.get('similarity', 0)
+    conf = r.get('confidence', 0)
+    print(f'  {i}. [{sim:.3f}] {r[\"text\"][:100]}')
+    print(f'     id={r[\"id\"]} cat={r[\"category\"]} conf={conf:.2f}')
+print(f'\\n{len(results)} result(s)')
+"
+}
+
+cmd_edge() {
+    if [[ $# -lt 3 ]]; then
+        error "Usage: quaid edge <subject> <relation> <object>"
+        exit 1
+    fi
+    local subject="$1" relation="$2" object="$3"
+    local owner
+    owner=$(get_owner)
+    (cd "$PLUGIN_DIR" && eval "$(_quaid_env)" python3 memory_graph.py create-edge \
+        "$subject" "$relation" "$object" --create-missing --json)
+}
+
+cmd_docs() {
+    if [[ $# -eq 0 ]]; then
+        error "Usage: quaid docs <query> [--limit N]"
+        exit 1
+    fi
+    local limit=5
+    local -a positional=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --limit) limit="$2"; shift 2 ;;
+            *)       positional+=("$1"); shift ;;
+        esac
+    done
+    local query="${positional[*]}"
+    (cd "$PLUGIN_DIR" && eval "$(_quaid_env)" python3 docs_rag.py search "$query" --limit "$limit")
+}
+
+cmd_search() {
+    if [[ $# -eq 0 ]]; then
+        error "Usage: quaid search <query>"
+        exit 1
+    fi
+    local query="$*"
+    local owner
+    owner=$(get_owner)
+    (cd "$PLUGIN_DIR" && eval "$(_quaid_env)" python3 memory_graph.py search "$query" --owner "$owner" --limit 10)
+}
+
+cmd_export() {
+    info "Exporting all facts as JSON..."
+    local output="${WORKSPACE_ROOT}/quaid-export-$(date +%Y%m%d-%H%M%S).json"
+    run_py "
+import sqlite3, json
+conn = sqlite3.connect('$(py_escape "$DATA_DIR")/memory.db')
+conn.row_factory = sqlite3.Row
+
+nodes = [dict(r) for r in conn.execute('SELECT id, name, category, status, confidence, owner, attributes, created_at, updated_at FROM nodes ORDER BY created_at').fetchall()]
+edges = [dict(r) for r in conn.execute('SELECT id, source_id, target_id, relation, weight, created_at FROM edges ORDER BY created_at').fetchall()]
+conn.close()
+
+# Parse attributes JSON
+for n in nodes:
+    try:
+        n['attributes'] = json.loads(n['attributes']) if n['attributes'] else {}
+    except:
+        n['attributes'] = {}
+
+export = {
+    'version': '${QUAID_VERSION:-0.1.0-alpha}',
+    'exported_at': __import__('datetime').datetime.now().isoformat(),
+    'nodes': nodes,
+    'edges': edges,
+    'stats': {'total_nodes': len(nodes), 'total_edges': len(edges)}
+}
+
+with open('$(py_escape "$output")', 'w') as f:
+    json.dump(export, f, indent=2, default=str)
+print(f'Exported {len(nodes)} nodes and {len(edges)} edges to $(py_escape "$output")')
+"
+    info "Export saved to ${output}"
+}
+
+cmd_migrate() {
+    info "Starting migration from existing markdown files..."
+    echo "  This will extract facts from SOUL.md, USER.md, TOOLS.md, MEMORY.md, AGENTS.md"
+    echo "  and store them as pending facts in the memory database."
+    echo ""
+
+    local owner
+    owner=$(get_owner)
+
+    run_py "
+import os, sys
+sys.path.insert(0, '.')
+from memory_graph import store
+from llm_clients import call_high_reasoning, parse_json_response
+
+files = [f for f in ['SOUL.md', 'USER.md', 'TOOLS.md', 'MEMORY.md', 'AGENTS.md']
+         if os.path.exists(os.path.join('$(py_escape "$WORKSPACE_ROOT")', f))]
+
+if not files:
+    print('No markdown files found in workspace.')
+    sys.exit(0)
+
+total_facts = 0
+for fname in files:
+    fpath = os.path.join('$(py_escape "$WORKSPACE_ROOT")', fname)
+    with open(fpath) as f:
+        content = f.read().strip()
+    if len(content) < 50:
+        print(f'  Skipping {fname} (too short)')
+        continue
+
+    print(f'  Extracting from {fname}...')
+    prompt = f'''Extract factual information from this document. Return a JSON array of objects:
+[{{\"fact\": \"...\", \"category\": \"fact|preference|belief|experience\"}}]
+
+Only extract clear, specific facts about the user or their preferences.
+Skip meta-information, instructions, and formatting.
+
+Document ({fname}):
+{content}'''
+
+    response, _ = call_high_reasoning(prompt, max_tokens=4000)
+    if response:
+        parsed = parse_json_response(response)
+        if isinstance(parsed, list):
+            for item in parsed:
+                if isinstance(item, dict) and 'fact' in item:
+                    store(item['fact'], owner_id='$(py_escape "$owner")',
+                          category=item.get('category', 'fact'),
+                          source='migration')
+                    total_facts += 1
+
+print(f'\\nMigration complete: {total_facts} facts extracted and stored as pending.')
+print(f'Next janitor run will review and activate them.')
+"
+}
+
+cmd_re_embed() {
+    warn "This will re-embed ALL facts in the database."
+    warn "This is required after changing the embedding model."
+    echo ""
+    echo -en "${BOLD}Continue? [y/N]${RESET} "
+    read -r REPLY
+    if [[ ! "$REPLY" =~ ^[Yy] ]]; then
+        echo "Aborted."
+        exit 0
+    fi
+
+    info "Clearing existing embeddings..."
+    run_py "
+import sqlite3
+conn = sqlite3.connect('$(py_escape "$DATA_DIR")/memory.db')
+conn.execute('UPDATE nodes SET embedding = NULL')
+conn.execute('DROP TABLE IF EXISTS vec_nodes')
+conn.execute('DELETE FROM embedding_cache')
+conn.commit()
+conn.close()
+print('Embeddings cleared.')
+"
+
+    info "Re-embedding all nodes..."
+    (cd "$PLUGIN_DIR" && eval "$(_quaid_env)" python3 janitor.py --task embeddings --apply)
+
+    info "Re-indexing RAG docs..."
+    (cd "$PLUGIN_DIR" && eval "$(_quaid_env)" python3 docs_rag.py index 2>/dev/null) || true
+
+    info "Re-embedding complete!"
+}
+
+cmd_janitor() {
+    (cd "$PLUGIN_DIR" && eval "$(_quaid_env)" python3 janitor.py "$@")
+}
+
+cmd_uninstall() {
+    local BACKUP_DIR="$HOME/.quaid-backups"
+
+    echo -e "${BOLD}Quaid Uninstaller${RESET}"
+    echo ""
+    echo "This will remove the Quaid plugin and revert your core markdown files"
+    echo "(SOUL.md, USER.md, IDENTITY.md, etc.) to the backup made at install time."
+    echo ""
+    echo "What gets removed:"
+    echo "  - Quaid plugin code (plugins/quaid/)"
+    echo "  - Quaid config (config/memory.json)"
+    echo "  - Quaid snippet files (journal/*.snippets.md)"
+    echo ""
+    echo "What stays untouched:"
+    echo "  - Your project directories (projects/)"
+    echo "  - Your journal entries (journal/*.journal.md)"
+    echo "  - Your memory database (data/memory.db)"
+    echo ""
+
+    # --- List available backups ---
+    local RESTORE_FROM=""
+    if [[ -d "$BACKUP_DIR" ]]; then
+        local -a BACKUPS=()
+        while IFS= read -r d; do
+            [[ -d "$d" ]] && BACKUPS+=("$d")
+        done < <(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -r)
+
+        if [[ ${#BACKUPS[@]} -gt 0 ]]; then
+            echo -e "${BOLD}Available backups:${RESET}"
+            for i in "${!BACKUPS[@]}"; do
+                local bdir="${BACKUPS[$i]}"
+                local -a bfiles=()
+                while IFS= read -r bf; do bfiles+=("$(basename "$bf")"); done < <(find "$bdir" -type f 2>/dev/null)
+                echo -e "  ${GREEN}$((i+1)))${RESET} $(basename "$bdir") — ${#bfiles[@]} files: ${bfiles[*]}"
+            done
+            echo ""
+            echo "Restoring a backup reverts your core markdown to exactly how it was"
+            echo "before Quaid was installed."
+            echo ""
+            echo -n "Restore from backup? Enter number (or 'n' to skip): "
+            read -r choice
+            if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le ${#BACKUPS[@]} ]]; then
+                RESTORE_FROM="${BACKUPS[$((choice-1))]}"
+                info "Will restore from: $(basename "$RESTORE_FROM")"
+            fi
+        fi
+    else
+        warn "No backups found at ~/.quaid-backups/"
+    fi
+
+    echo ""
+    echo -en "${BOLD}Proceed with uninstall? [y/N]${RESET} "
+    read -r REPLY
+    if [[ ! "$REPLY" =~ ^[Yy] ]]; then
+        echo "Cancelled."
+        exit 0
+    fi
+
+    echo ""
+
+    # --- Restore from backup ---
+    if [[ -n "$RESTORE_FROM" ]]; then
+        info "Restoring core markdown from backup..."
+        local restored=0
+        for f in "$RESTORE_FROM"/*; do
+            [[ ! -f "$f" ]] && continue
+            local fname
+            fname=$(basename "$f")
+            case "$fname" in
+                memory.json)
+                    cp "$f" "${CONFIG_DIR}/memory.json" 2>/dev/null && ((restored++)) || true
+                    ;;
+                memory.db) ;; # Don't restore DB — it's not deleted
+                *)
+                    cp "$f" "${WORKSPACE_ROOT}/$fname" 2>/dev/null && ((restored++)) || true
+                    ;;
+            esac
+        done
+        info "Restored $restored files."
+    fi
+
+    # --- Remove plugin ---
+    if [[ -d "$PLUGIN_DIR" ]]; then
+        rm -rf "$PLUGIN_DIR"
+        info "Removed plugin directory"
+    fi
+
+    # --- Remove config (unless restored from backup) ---
+    if [[ -f "${CONFIG_DIR}/memory.json" ]] && [[ -z "$RESTORE_FROM" ]]; then
+        rm -f "${CONFIG_DIR}/memory.json"
+        info "Removed config/memory.json"
+    fi
+
+    # --- Clean snippet files ---
+    if [[ -d "${WORKSPACE_ROOT}/journal" ]]; then
+        find "${WORKSPACE_ROOT}/journal" -name "*.snippets.md" -delete 2>/dev/null || true
+        info "Removed snippet files"
+    fi
+
+    echo ""
+    info "Quaid has been uninstalled."
+    if [[ -n "$RESTORE_FROM" ]]; then
+        info "Core markdown reverted to pre-install state."
+    fi
+    echo ""
+    echo -e "${DIM}Memory database kept at: ${DATA_DIR}/memory.db${RESET}"
+    echo -e "${DIM}Backups kept at: ${BACKUP_DIR}${RESET}"
+    echo ""
+    echo -e "To reinstall:"
+    echo -e "  ${BOLD}curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/install.sh | bash${RESET}"
+    echo ""
+}
+
+cmd_upgrade() {
+    info "To upgrade Quaid, re-run the installer:"
+    echo ""
+    echo "  curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/install.sh | bash"
+    echo ""
+    info "The installer preserves your data and offers to back up existing files."
+}
+
+cmd_help() {
+    echo -e "${BOLD}quaid${RESET} — Quaid Memory Plugin CLI"
+    echo ""
+    echo "Usage: quaid <command> [options]"
+    echo ""
+    echo -e "${BOLD}Extract & Store:${RESET}"
+    echo "  extract <file>       Extract memories from conversation transcript"
+    echo "                         --dry-run, --no-snippets, --no-journal, --json"
+    echo "  store <text>         Store a single memory (--category, --pinned)"
+    echo ""
+    echo -e "${BOLD}Search & Retrieve:${RESET}"
+    echo "  search <query>       Search memories (full recall pipeline)"
+    echo "  find <query>         Quick search (no reranking) (--limit N)"
+    echo "  get <id>             Get a memory by ID"
+    echo "  docs <query>         Search project documentation (--limit N)"
+    echo ""
+    echo -e "${BOLD}Manage:${RESET}"
+    echo "  forget [query]       Delete a memory (--id <id>, --yes)"
+    echo "  edge <s> <r> <o>     Create a relationship edge"
+    echo "  stats                Database statistics"
+    echo ""
+    echo -e "${BOLD}Admin:${RESET}"
+    echo "  doctor               Health check"
+    echo "  config               Show configuration"
+    echo "  export               Export all facts as JSON"
+    echo "  migrate              Import facts from existing markdown files"
+    echo "  re-embed             Re-embed all facts (after changing embedding model)"
+    echo "  janitor [opts]       Run janitor pipeline (--dry-run, --task <name>)"
+    echo "  mcp-server           Start MCP server (stdio transport)"
+    echo "  upgrade              Show upgrade instructions"
+    echo "  uninstall            Clean removal (preserves DB backup)"
+    echo "  help                 Show this help"
+}
+
+# --- Dispatch ---
+case "${1:-help}" in
+    extract)    shift; cmd_extract "$@" ;;
+    store)      shift; cmd_store "$@" ;;
+    get)        shift; cmd_get "$@" ;;
+    forget)     shift; cmd_forget "$@" ;;
+    find)       shift; cmd_find "$@" ;;
+    edge)       shift; cmd_edge "$@" ;;
+    docs)       shift; cmd_docs "$@" ;;
+    search|recall) shift; cmd_search "$@" ;;
+    doctor)     cmd_doctor ;;
+    config)     cmd_config ;;
+    stats)      cmd_stats ;;
+    export)     cmd_export ;;
+    migrate)    cmd_migrate ;;
+    re-embed)   cmd_re_embed ;;
+    janitor)    shift; cmd_janitor "$@" ;;
+    mcp-server|mcp) shift; exec env $(_quaid_env) python3 "$PLUGIN_DIR/mcp_server.py" "$@" ;;
+    upgrade)    cmd_upgrade ;;
+    uninstall)  cmd_uninstall ;;
+    help|--help|-h) cmd_help ;;
+    *)          error "Unknown command: $1"; echo ""; cmd_help; exit 1 ;;
+esac
