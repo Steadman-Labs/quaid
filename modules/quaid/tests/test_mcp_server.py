@@ -265,6 +265,25 @@ class TestMemoryRecall:
         mod.memory_recall("test", limit=-5)
         assert mock_api.recall.call_args.kwargs["limit"] == 1
 
+    def test_recall_scope_fields_route_through_advanced_path(self, server):
+        mod, mock_api, *_ = server
+        mod.memory_recall(
+            "test",
+            source_channel="telegram",
+            source_conversation_id="group-1",
+            source_author_id="FatMan26",
+            actor_id="user:solomon",
+            subject_entity_id="user:solomon",
+            include_unscoped=False,
+        )
+        kwargs = mock_api.recall.call_args.kwargs
+        assert kwargs["source_channel"] == "telegram"
+        assert kwargs["source_conversation_id"] == "group-1"
+        assert kwargs["source_author_id"] == "FatMan26"
+        assert kwargs["actor_id"] == "user:solomon"
+        assert kwargs["subject_entity_id"] == "user:solomon"
+        assert kwargs["include_unscoped"] is False
+
 
 # ---------------------------------------------------------------------------
 # Tests — memory_search
