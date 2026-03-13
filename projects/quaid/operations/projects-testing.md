@@ -65,7 +65,7 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDB
 Trigger indexing first (embeddings run on alfie via Ollama):
 ```bash
 ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
-  ~/.local/bin/quaid janitor --task rag --apply"
+  ~/.local/bin/quaid janitor --task rag --apply --approve"
 ```
 
 Then search:
@@ -172,7 +172,7 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLA
 Trigger indexing (same Ollama instance as OC — alfie.local):
 ```bash
 ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
-  ~/.local/bin/quaid janitor --task rag --apply"
+  ~/.local/bin/quaid janitor --task rag --apply --approve"
 ```
 
 Then search:
@@ -321,7 +321,7 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDB
 ```bash
 # Index all docs (Ollama on alfie handles both OC and CC docs)
 ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
-  ~/.local/bin/quaid janitor --task rag --apply"
+  ~/.local/bin/quaid janitor --task rag --apply --approve"
 
 # CC searches for OC's doc
 ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
