@@ -1,22 +1,24 @@
 # Projects System — Live Test Protocol
 
-End-to-end validation of the projects system on alfie.local, where OC and CC share the same `QUAID_HOME`.
+> **Note:** Replace `<oc-host>` with your OpenClaw host, `$QUAID_HOME` with your actual Quaid home path, and instance names with your configured values.
 
-**All commands run on alfie.local** — prefix with `ssh alfie.local` or open a shell there.
+End-to-end validation of the projects system on `<oc-host>`, where OC and CC share the same `QUAID_HOME`.
+
+**All commands run on `<oc-host>`** — prefix with `ssh <oc-host>` or open a shell there.
 
 ```bash
 # OC environment
-OC_ENV="QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid"
+OC_ENV="QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw"
 
 # CC environment
-CC_ENV="QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid"
+CC_ENV="QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code"
 
 # Quaid binary (same for both — same extension, different QUAID_INSTANCE)
 QUAID=~/.local/bin/quaid
 ```
 
-Projects are shared at `~/quaid/shared/projects/` — both adapters read and write the same directory.
-The global registry lives at `~/quaid/project-registry.json` — shared by both adapters.
+Projects are shared at `$QUAID_HOME/shared/projects/` — both adapters read and write the same directory.
+The global registry lives at `$QUAID_HOME/project-registry.json` — shared by both adapters.
 
 Run order:
 1. OC CRUD
@@ -30,7 +32,7 @@ Run order:
 ### OC-P1: Create project
 
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid registry create-project oc-test-proj --label 'OC Test Project'"
 ```
 
@@ -38,7 +40,7 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDB
 
 **Verify:**
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid registry list | grep oc-test-proj"
 ```
 
@@ -47,14 +49,14 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDB
 ### OC-P2: Register a doc
 
 ```bash
-ssh alfie.local "echo '# OC Doc — test content about memory extraction' > /tmp/oc-test-doc.md && \
-  QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "echo '# OC Doc — test content about memory extraction' > /tmp/oc-test-doc.md && \
+  QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid registry register /tmp/oc-test-doc.md --project oc-test-proj --description 'OC test doc'"
 ```
 
 **Verify:**
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid docs list --project oc-test-proj"
 ```
 
@@ -62,15 +64,15 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDB
 
 ### OC-P3: Search project docs
 
-Trigger indexing first (embeddings run on alfie via Ollama):
+Trigger indexing first (embeddings run on `<oc-host>` via Ollama):
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid janitor --task rag --apply --approve"
 ```
 
 Then search:
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid docs search 'memory extraction' --project oc-test-proj"
 ```
 
@@ -81,7 +83,7 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDB
 ### OC-P4: Project show
 
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid project show oc-test-proj"
 ```
 
@@ -92,7 +94,7 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDB
 ### OC-P5: Janitor check
 
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid janitor --task rag --dry-run 2>&1 | grep -E 'oc-test-proj|orphan|ERROR'"
 ```
 
@@ -103,9 +105,9 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDB
 ### OC-P6: Markdown sanity check
 
 ```bash
-ssh alfie.local "head -5 /Users/clawdbot/quaid/shared/projects/oc-test-proj/PROJECT.md && \
-  file /Users/clawdbot/quaid/shared/projects/oc-test-proj/PROJECT.md && \
-  ls /Users/clawdbot/quaid/shared/projects/oc-test-proj/"
+ssh <oc-host> "head -5 $QUAID_HOME/shared/projects/oc-test-proj/PROJECT.md && \
+  file $QUAID_HOME/shared/projects/oc-test-proj/PROJECT.md && \
+  ls $QUAID_HOME/shared/projects/oc-test-proj/"
 ```
 
 **Expected:**
@@ -118,13 +120,13 @@ ssh alfie.local "head -5 /Users/clawdbot/quaid/shared/projects/oc-test-proj/PROJ
 ### OC-P7: Delete project
 
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid project delete oc-test-proj"
 ```
 
 **Verify:**
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid registry list | grep oc-test-proj"   # empty
 ```
 
@@ -139,13 +141,13 @@ CC uses the same `QUAID_HOME` as OC but `QUAID_INSTANCE=claude-code`. The `claud
 ### CC-P1: Create project
 
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
   ~/.local/bin/quaid registry create-project cc-test-proj --label 'CC Test Project'"
 ```
 
 **Verify:**
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
   ~/.local/bin/quaid registry list | grep cc-test-proj"
 ```
 
@@ -154,14 +156,14 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLA
 ### CC-P2: Register a doc
 
 ```bash
-ssh alfie.local "echo '# CC Doc — test content about session extraction' > /tmp/cc-test-doc.md && \
-  QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "echo '# CC Doc — test content about session extraction' > /tmp/cc-test-doc.md && \
+  QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
   ~/.local/bin/quaid registry register /tmp/cc-test-doc.md --project cc-test-proj --description 'CC test doc'"
 ```
 
 **Verify:**
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
   ~/.local/bin/quaid docs list --project cc-test-proj"
 ```
 
@@ -169,15 +171,15 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLA
 
 ### CC-P3: Search project docs
 
-Trigger indexing (same Ollama instance as OC — alfie.local):
+Trigger indexing (same Ollama instance as OC — `<oc-host>`):
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
   ~/.local/bin/quaid janitor --task rag --apply --approve"
 ```
 
 Then search:
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
   ~/.local/bin/quaid docs search 'session extraction' --project cc-test-proj"
 ```
 
@@ -188,7 +190,7 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLA
 ### CC-P4: Project show
 
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
   ~/.local/bin/quaid project show cc-test-proj"
 ```
 
@@ -199,7 +201,7 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLA
 ### CC-P5: Janitor check
 
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
   ~/.local/bin/quaid janitor --task rag --dry-run 2>&1 | grep -E 'cc-test-proj|orphan|ERROR'"
 ```
 
@@ -210,9 +212,9 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLA
 ### CC-P6: Markdown sanity check
 
 ```bash
-ssh alfie.local "head -5 /Users/clawdbot/quaid/shared/projects/cc-test-proj/PROJECT.md && \
-  file /Users/clawdbot/quaid/shared/projects/cc-test-proj/PROJECT.md && \
-  ls /Users/clawdbot/quaid/shared/projects/cc-test-proj/"
+ssh <oc-host> "head -5 $QUAID_HOME/shared/projects/cc-test-proj/PROJECT.md && \
+  file $QUAID_HOME/shared/projects/cc-test-proj/PROJECT.md && \
+  ls $QUAID_HOME/shared/projects/cc-test-proj/"
 ```
 
 **Expected:** `# Project: CC Test Project`, UTF-8, `docs/` present.
@@ -222,13 +224,13 @@ ssh alfie.local "head -5 /Users/clawdbot/quaid/shared/projects/cc-test-proj/PROJ
 ### CC-P7: Delete project
 
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
   ~/.local/bin/quaid project delete cc-test-proj"
 ```
 
 **Verify:**
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
   ~/.local/bin/quaid registry list | grep cc-test-proj"   # empty
 ```
 
@@ -236,7 +238,7 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLA
 
 ## Cross-Platform
 
-Both OC and CC share `QUAID_HOME=/Users/clawdbot/quaid`, so the global registry is truly shared — `project-registry.json` is the same file for both. These steps verify that cross-instance project ownership and doc sharing work correctly.
+Both OC and CC share `QUAID_HOME=$QUAID_HOME`, so the global registry is truly shared — `project-registry.json` is the same file for both. These steps verify that cross-instance project ownership and doc sharing work correctly.
 
 ---
 
@@ -244,11 +246,11 @@ Both OC and CC share `QUAID_HOME=/Users/clawdbot/quaid`, so the global registry 
 
 ```bash
 # From OC
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid global-registry list"
 
 # From CC — same output, same file
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
   ~/.local/bin/quaid global-registry list"
 ```
 
@@ -260,18 +262,18 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLA
 
 ```bash
 # Create project
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid registry create-project shared-xp-proj --label 'Cross-Platform Test'"
 
 # Write and register a doc
-ssh alfie.local "echo '# OC contribution — memory architecture overview' > /tmp/oc-xp-doc.md && \
-  QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "echo '# OC contribution — memory architecture overview' > /tmp/oc-xp-doc.md && \
+  QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid registry register /tmp/oc-xp-doc.md --project shared-xp-proj --description 'OC arch doc'"
 ```
 
 **Verify:**
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid docs list --project shared-xp-proj"
 ```
 
@@ -280,7 +282,7 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDB
 ### XP-3: CC sees the project
 
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
   ~/.local/bin/quaid global-registry list | grep shared-xp-proj"
 ```
 
@@ -292,23 +294,23 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLA
 
 ```bash
 # Link CC instance to the project
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
   ~/.local/bin/quaid project link shared-xp-proj"
 
 # Write and register a CC doc to the shared project
-ssh alfie.local "echo '# CC contribution — session extraction design notes' > /tmp/cc-xp-doc.md && \
-  QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "echo '# CC contribution — session extraction design notes' > /tmp/cc-xp-doc.md && \
+  QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
   ~/.local/bin/quaid registry register /tmp/cc-xp-doc.md --project shared-xp-proj --description 'CC session doc'"
 ```
 
 **Verify:**
 ```bash
 # Project now shows both instances
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid project show shared-xp-proj"
 
 # Both docs visible
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid docs list --project shared-xp-proj"
 ```
 
@@ -319,12 +321,12 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDB
 ### XP-5: CC can see and search the OC doc
 
 ```bash
-# Index all docs (Ollama on alfie handles both OC and CC docs)
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+# Index all docs (Ollama on <oc-host> handles both OC and CC docs)
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
   ~/.local/bin/quaid janitor --task rag --apply --approve"
 
 # CC searches for OC's doc
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=claude-code \
   ~/.local/bin/quaid docs search 'memory architecture' --project shared-xp-proj"
 ```
 
@@ -335,7 +337,7 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=claude-code CLA
 ### XP-6: OC can see and search the CC doc
 
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid docs search 'session extraction' --project shared-xp-proj"
 ```
 
@@ -346,7 +348,7 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDB
 ### XP-7: Janitor check (cross-instance)
 
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid janitor --task rag --dry-run 2>&1 | grep -E 'shared-xp-proj|orphan|ERROR'"
 ```
 
@@ -357,9 +359,9 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDB
 ### XP-8: Markdown sanity check (shared project)
 
 ```bash
-ssh alfie.local "head -5 /Users/clawdbot/quaid/shared/projects/shared-xp-proj/PROJECT.md && \
-  file /Users/clawdbot/quaid/shared/projects/shared-xp-proj/PROJECT.md && \
-  ls /Users/clawdbot/quaid/shared/projects/shared-xp-proj/"
+ssh <oc-host> "head -5 $QUAID_HOME/shared/projects/shared-xp-proj/PROJECT.md && \
+  file $QUAID_HOME/shared/projects/shared-xp-proj/PROJECT.md && \
+  ls $QUAID_HOME/shared/projects/shared-xp-proj/"
 ```
 
 **Expected:** `# Project: Cross-Platform Test`, UTF-8, `docs/` present.
@@ -369,13 +371,13 @@ ssh alfie.local "head -5 /Users/clawdbot/quaid/shared/projects/shared-xp-proj/PR
 ### XP-9: Cleanup
 
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid project delete shared-xp-proj"
 ```
 
 **Verify:**
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid registry list | grep shared-xp-proj"   # empty
 ```
 
@@ -404,10 +406,10 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDB
 
 ## Notes
 
-- **Shared QUAID_HOME**: Both OC and CC use `QUAID_HOME=/Users/clawdbot/quaid` on alfie.local. The global registry and shared project files are the same for both adapters. This is a requirement for cross-platform tests to work — separate QUAID_HOME paths mean separate registries.
-- **Projects location**: `~/quaid/shared/projects/` — shared across both adapters.
-- **CC instance dir**: `~/quaid/claude-code/` — created on first use.
-- **RAG indexing**: Both OC and CC use the same Ollama instance on alfie. Indexing from either adapter writes chunks that are visible to both (same `memory.db`).
+- **Shared QUAID_HOME**: Both OC and CC use `QUAID_HOME=$QUAID_HOME` on `<oc-host>`. The global registry and shared project files are the same for both adapters. This is a requirement for cross-platform tests to work — separate QUAID_HOME paths mean separate registries.
+- **Projects location**: `$QUAID_HOME/shared/projects/` — shared across both adapters.
+- **CC instance dir**: `$QUAID_HOME/claude-code/` — created on first use.
+- **RAG indexing**: Both OC and CC use the same Ollama instance on `<oc-host>`. Indexing from either adapter writes chunks that are visible to both (same `memory.db`).
 - **`project link` command**: Adds the current `QUAID_INSTANCE` to the project's `instances` list in `project-registry.json` without changing ownership or moving files.
 - **M3/M4 on CC**: CC has no `/compact` or `/new` commands — not part of this protocol. CC extraction uses `PreCompact` hook and `SessionEnd` hook.
 
@@ -459,7 +461,7 @@ ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDB
 
 **Cleanup:**
 ```bash
-ssh alfie.local "QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   ~/.local/bin/quaid project delete test-essay"
 ```
 
@@ -498,7 +500,7 @@ ls -la ~/quaid/shared/projects/staging/
 
 **Setup:**
 ```bash
-ssh alfie.local "touch /Users/clawdbot/quaid/claudecode/modules/quaid/core/lifecycle/janitor.py"
+ssh <oc-host> "touch $QUAID_HOME/claudecode/modules/quaid/core/lifecycle/janitor.py"
 ```
 
 **Then say to the agent:**
@@ -508,7 +510,7 @@ ssh alfie.local "touch /Users/clawdbot/quaid/claudecode/modules/quaid/core/lifec
 
 **Reset:**
 ```bash
-ssh alfie.local "cd /Users/clawdbot/quaid/claudecode/modules/quaid && git checkout core/lifecycle/janitor.py"
+ssh <oc-host> "cd $QUAID_HOME/claudecode/modules/quaid && git checkout core/lifecycle/janitor.py"
 ```
 
 ---
@@ -527,7 +529,7 @@ ssh alfie.local "cd /Users/clawdbot/quaid/claudecode/modules/quaid && git checko
 ### Quick CLI Verification
 
 ```bash
-ssh alfie.local "cd /Users/clawdbot/quaid/claudecode/modules/quaid && \
-  QUAID_HOME=/Users/clawdbot/quaid QUAID_INSTANCE=openclaw CLAWDBOT_WORKSPACE=/Users/clawdbot/quaid \
+ssh <oc-host> "cd $QUAID_HOME/claudecode/modules/quaid && \
+  QUAID_HOME=$QUAID_HOME QUAID_INSTANCE=openclaw \
   python3 datastore/docsdb/registry.py list --project quaid"
 ```
